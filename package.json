@@ -1,22 +1,20 @@
 {
-  "name": "x-style-mcp",
+  "name": "x-mcp",
   "version": "1.0.0",
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "latest",
+    "@modelcontextprotocol/sdk": "^1.2.0",
     "@supabase/supabase-js": "^2.33.1",
     "axios": "^1.4.0",
-    "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
     "uuid": "^9.0.0",
     "zod": "^3.21.4"
   },
   "scripts": {
-    "dev": "node api/index.js",
-    "start": "node api/index.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   }
 }

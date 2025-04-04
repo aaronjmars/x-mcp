@@ -1,32 +1,68 @@
-// server.js
-import { z } from "zod";
+// Use correct import paths according to the documentation
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod"; // We'll use zod for schema validation
 import { createClient } from "@supabase/supabase-js";
 import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
 
-// Use environment variables
+// Custom logging function that writes to stderr instead of stdout
+const log = {
+  info: (...args) => console.error("[INFO]", ...args),
+  warn: (...args) => console.error("[WARN]", ...args),
+  error: (...args) => console.error("[ERROR]", ...args),
+  debug: (...args) => console.error("[DEBUG]", ...args),
+};
+
+// Log process environment
+log.info("Starting up X Style MCP server...");
+
+// Configure constants and environment variables
 const TWITTER_API_BASE = "https://api.twitterapi.io/twitter";
 const TWITTER_API_KEY = process.env.TWITTER_API_KEY;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-// Setup logging
-const log = {
-  info: (...args) => console.log("[INFO]", ...args),
-  warn: (...args) => console.warn("[WARN]", ...args),
-  error: (...args) => console.error("[ERROR]", ...args),
-  debug: (...args) => console.log("[DEBUG]", ...args),
-};
+log.info(
+  `Environment variables loaded. X API: ${
+    TWITTER_API_KEY ? "✓" : "✗"
+  }, Supabase: ${SUPABASE_URL && SUPABASE_KEY ? "✓" : "✗"}`
+);
 
-// Initialize Supabase
+// Check if API key is loaded
+if (!TWITTER_API_KEY) {
+  log.error("ERROR: X API key not found in environment variables");
+
+  // Create a simple mock server that explains the issue
+  const server = new McpServer({
+    name: "x-style",
+    version: "1.0.0",
+  });
+
+  server.tool("setup_instructions", {}, async () => {
+    return {
+      content: [
+        {
+          type: "text",
+          text: "X API key not properly configured. Please set up either the .env file or edit server.js with your API key.",
+        },
+      ],
+    };
+  });
+
+  log.info("Starting MCP server in limited mode...");
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  process.exit(1);
+}
+
 let supabase = null;
 let useDatabase = true;
 
-// In-memory profile cache as a fallback
-const memoryCache = new Map();
-
-// Cache settings
-const CACHE_EXPIRY_HOURS = 24; // Profile data considered fresh for 24 hours
+// Log environment variable status
+log.info(`X API Key: ${TWITTER_API_KEY ? "✓ Found" : "✗ Missing"}`);
+log.info(`Supabase URL: ${SUPABASE_URL ? "✓ Found" : "✗ Missing"}`);
+log.info(`Supabase API Key: ${SUPABASE_KEY ? "✓ Found" : "✗ Missing"}`);
 
 // Check if Supabase credentials are available
 if (
@@ -50,6 +86,18 @@ if (
     useDatabase = false;
   }
 }
+
+// In-memory profile cache as a fallback
+const memoryCache = new Map();
+
+// Cache settings
+const CACHE_EXPIRY_HOURS = 24; // Profile data considered fresh for 24 hours
+
+// Create an MCP server
+const server = new McpServer({
+  name: "x-style",
+  version: "1.0.0",
+});
 
 // ----- Helper Functions -----
 
@@ -110,11 +158,7 @@ async function getUserTweets(username, targetCount = 100) {
   const MAX_REQUESTS = 5; // Limit to 5 requests to avoid excessive API usage
 
   // Loop until we have enough posts or reach the request limit
-  while (
-    hasMore &&
-    allTweets.length < targetCount &&
-    requestCount < MAX_REQUESTS
-  ) {
+  while (hasMore && allTweets.length < targetCount && requestCount < MAX_REQUESTS) {
     // Make the API request with cursor for pagination
     const response = await makeTwitterRequest("user/last_tweets", {
       userName: cleanUsername,
@@ -141,19 +185,17 @@ async function getUserTweets(username, targetCount = 100) {
     }
 
     // Filter out reposts
-    const originalTweets = pageTweets.filter((tweet) => {
+    const originalTweets = pageTweets.filter(tweet => {
       // Check various possible indicators of a repost
       return !(
-        (tweet.text && tweet.text.startsWith("RT @")) ||
-        tweet.isRetweet === true ||
+        (tweet.text && tweet.text.startsWith("RT @")) || 
+        tweet.isRetweet === true || 
         tweet.retweeted === true
       );
     });
 
     allTweets = [...allTweets, ...originalTweets];
-    log.info(
-      `Retrieved ${originalTweets.length} original posts, total: ${allTweets.length}`
-    );
+    log.info(`Retrieved ${originalTweets.length} original posts, total: ${allTweets.length}`);
 
     // Check if there are more posts to fetch
     if (response.data && response.data.next_cursor) {
@@ -295,28 +337,28 @@ async function storeUserTweets(username, tweets) {
   const profileId = uuidv4();
 
   // Process posts to ensure they're in a consistent format
-  const simplifiedTweets = tweets.map((tweet) => {
+  const simplifiedTweets = tweets.map(tweet => {
     // Normalize post data to ensure consistent structure
     const normalized = normalizeTweetData(tweet);
     // Return only the fields we need
     return {
       id: normalized.id,
       text: normalized.text,
-      created_at: normalized.created_at,
+      created_at: normalized.created_at
     };
   });
 
   // Create the profile data object with posts inside it
   const profileData = {
     tweets: simplifiedTweets,
-    analyzed_at: new Date().toISOString(),
+    analyzed_at: new Date().toISOString()
   };
 
   // Create the record to store in the database
   const profileRecord = {
     id: profileId,
     handle: username,
-    profile_data: profileData, // Store posts inside profile_data
+    profile_data: profileData,  // Store posts inside profile_data
     created_at: new Date().toISOString(),
   };
 
@@ -404,9 +446,7 @@ async function getCachedProfile(username) {
 
       // Validate profile data structure to avoid errors
       if (!profile.profile_data || !profile.profile_data.tweets) {
-        log.warn(
-          `Invalid profile structure for ${username}, missing tweets in profile_data`
-        );
+        log.warn(`Invalid profile structure for ${username}, missing tweets in profile_data`);
         return { status: "invalid", profile };
       }
 
@@ -470,345 +510,312 @@ function getTimeAgo(dateString) {
   }
 }
 
-// Function to set up the server with all tools
-export function setupXStyleServer(server) {
-  if (!TWITTER_API_KEY) {
-    log.error("ERROR: X API key not found in environment variables");
+// ----- Define MCP Tools -----
 
-    server.tool("setup_instructions", {}, async () => {
+/**
+ * Analyze X profile tool
+ */
+server.tool(
+  "analyze_twitter_profile",
+  {
+    username: z.string().describe("X handle (without @)"),
+    force_refresh: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, fetch new data even if profile exists in database"),
+  },
+  async ({ username, force_refresh = false }) => {
+    // Check cache first unless force_refresh is true
+    if (!force_refresh) {
+      const cachedResult = await getCachedProfile(username);
+
+      if (cachedResult && cachedResult.status === "fresh") {
+        // Safely access and return cached data
+        try {
+          const tweets = cachedResult.profile.profile_data?.tweets || [];
+          const tweetCount = tweets.length || 0;
+          
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Using cached posts for @${username} (fetched ${getTimeAgo(
+                  cachedResult.profile.created_at
+                )}). ${tweetCount} posts available.`,
+              },
+            ],
+          };
+        } catch (error) {
+          log.error(`Error processing cached profile for ${username}: ${error.message}`);
+          // If there's an error processing the cache, we'll fetch fresh data instead
+          log.info(`Falling back to fetching fresh data for ${username}`);
+          // Continue to the code below to fetch fresh data
+        }
+      }
+    }
+
+    // Fetch posts
+    log.info(`Fetching posts for ${username}...`);
+    const tweets = await getUserTweets(username);
+
+    if (!tweets || tweets.length === 0) {
       return {
         content: [
           {
             type: "text",
-            text: "X API key not properly configured. Please contact the server administrator.",
+            text: "Unable to fetch posts for this user. The user may not exist or have no public posts.",
           },
         ],
+        isError: true,
       };
-    });
+    }
 
-    return;
+    // Store the posts
+    const storageResult = await storeUserTweets(username, tweets);
+
+    if (storageResult.status === "error") {
+      log.warn(
+        "Posts fetched but failed to store results:",
+        storageResult.message
+      );
+    } else {
+      log.info(
+        `Stored ${tweets.length} posts for ${username} (storage: ${storageResult.storage})`
+      );
+    }
+
+    // Return basic stats about the posts
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Successfully fetched and stored ${tweets.length} posts for @${username}. These will be used for post generation.`,
+        },
+      ],
+    };
   }
+);
 
-  // Analyze X profile tool
-  server.tool(
-    "analyze_twitter_profile",
-    {
-      username: z.string().describe("X handle (without @)"),
-      force_refresh: z
-        .boolean()
-        .optional()
-        .default(false)
-        .describe("If true, fetch new data even if profile exists in database"),
-    },
-    async ({ username, force_refresh = false }) => {
-      // Check cache first unless force_refresh is true
-      if (!force_refresh) {
-        const cachedResult = await getCachedProfile(username);
+/**
+ * Generate post in the style of user(s)
+ * Merged functionality of generate_tweet and mix_twitter_styles
+ */
+server.tool(
+  "generate_tweet",
+  {
+    usernames: z.array(z.string()).describe("Array of X handles to mimic (without @)"),
+    topic: z.string().describe("Topic to post about"),
+  },
+  async ({ usernames, topic }) => {
+    // Handle single string case for backward compatibility
+    if (typeof usernames === 'string') {
+      usernames = [usernames];
+    }
+    
+    // Ensure usernames is an array
+    if (!Array.isArray(usernames)) {
+      usernames = [usernames];
+    }
+    
+    if (!usernames || usernames.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Please provide at least one X username to analyze.",
+          },
+        ],
+        isError: true,
+      };
+    }
 
-        if (cachedResult && cachedResult.status === "fresh") {
-          // Safely access and return cached data
-          try {
-            const tweets = cachedResult.profile.profile_data?.tweets || [];
-            const tweetCount = tweets.length || 0;
+    // Results array to collect all posts
+    const userTweets = [];
 
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Using cached posts for @${username} (fetched ${getTimeAgo(
-                    cachedResult.profile.created_at
-                  )}). ${tweetCount} posts available.`,
-                },
-              ],
-            };
-          } catch (error) {
-            log.error(
-              `Error processing cached profile for ${username}: ${error.message}`
-            );
-            // If there's an error processing the cache, we'll fetch fresh data instead
-            log.info(`Falling back to fetching fresh data for ${username}`);
-            // Continue to the code below to fetch fresh data
-          }
+    // Process each username
+    for (const username of usernames) {
+      log.info(`Getting profile for ${username}...`);
+      const cachedResult = await getCachedProfile(username);
+
+      let tweets = [];
+      // If we don't have the profile or it's stale, fetch new posts
+      if (!cachedResult || cachedResult.status === "stale" || cachedResult.status === "invalid") {
+        log.info(`No fresh posts found for ${username}, fetching...`);
+        const fetchedTweets = await getUserTweets(username, 100);
+
+        if (!fetchedTweets || fetchedTweets.length === 0) {
+          log.warn(`Could not fetch posts for @${username}. Skipping this user.`);
+          continue; // Skip this user but continue with others
         }
-      }
 
-      // Fetch posts
-      log.info(`Fetching posts for ${username}...`);
-      const tweets = await getUserTweets(username);
-
-      if (!tweets || tweets.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Unable to fetch posts for this user. The user may not exist or have no public posts.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Store the posts
-      const storageResult = await storeUserTweets(username, tweets);
-
-      if (storageResult.status === "error") {
-        log.warn(
-          "Posts fetched but failed to store results:",
-          storageResult.message
-        );
+        await storeUserTweets(username, fetchedTweets);
+        tweets = fetchedTweets.map(tweet => normalizeTweetData(tweet));
       } else {
-        log.info(
-          `Stored ${tweets.length} posts for ${username} (storage: ${storageResult.storage})`
-        );
-      }
-
-      // Return basic stats about the posts
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Successfully fetched and stored ${tweets.length} posts for @${username}. These will be used for post generation.`,
-          },
-        ],
-      };
-    }
-  );
-
-  // Generate tweet in the style of user(s)
-  server.tool(
-    "generate_tweet",
-    {
-      usernames: z
-        .array(z.string())
-        .describe("Array of X handles to mimic (without @)"),
-      topic: z.string().describe("Topic to post about"),
-    },
-    async ({ usernames, topic }) => {
-      // Handle single string case for backward compatibility
-      if (typeof usernames === "string") {
-        usernames = [usernames];
-      }
-
-      // Ensure usernames is an array
-      if (!Array.isArray(usernames)) {
-        usernames = [usernames];
-      }
-
-      if (!usernames || usernames.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Please provide at least one X username to analyze.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Results array to collect all posts
-      const userTweets = [];
-
-      // Process each username
-      for (const username of usernames) {
-        log.info(`Getting profile for ${username}...`);
-        const cachedResult = await getCachedProfile(username);
-
-        let tweets = [];
-        // If we don't have the profile or it's stale, fetch new posts
-        if (
-          !cachedResult ||
-          cachedResult.status === "stale" ||
-          cachedResult.status === "invalid"
-        ) {
-          log.info(`No fresh posts found for ${username}, fetching...`);
+        // Use cached profile - now safely accessing the posts inside profile_data
+        log.info(`Using cached profile for ${username}`);
+        if (cachedResult.profile.profile_data && cachedResult.profile.profile_data.tweets) {
+          tweets = cachedResult.profile.profile_data.tweets;
+        } else if (cachedResult.profile.tweets) {
+          tweets = cachedResult.profile.tweets;
+        } else {
+          log.warn(`Cached profile for ${username} has invalid structure, fetching new data`);
           const fetchedTweets = await getUserTweets(username, 100);
-
+          
           if (!fetchedTweets || fetchedTweets.length === 0) {
-            log.warn(
-              `Could not fetch posts for @${username}. Skipping this user.`
-            );
-            continue; // Skip this user but continue with others
+            log.warn(`Could not fetch posts for @${username}. Skipping this user.`);
+            continue;
           }
-
+          
           await storeUserTweets(username, fetchedTweets);
-          tweets = fetchedTweets.map((tweet) => normalizeTweetData(tweet));
-        } else {
-          // Use cached profile - now safely accessing the posts inside profile_data
-          log.info(`Using cached profile for ${username}`);
-          if (
-            cachedResult.profile.profile_data &&
-            cachedResult.profile.profile_data.tweets
-          ) {
-            tweets = cachedResult.profile.profile_data.tweets;
-          } else if (cachedResult.profile.tweets) {
-            tweets = cachedResult.profile.tweets;
-          } else {
-            log.warn(
-              `Cached profile for ${username} has invalid structure, fetching new data`
-            );
-            const fetchedTweets = await getUserTweets(username, 100);
-
-            if (!fetchedTweets || fetchedTweets.length === 0) {
-              log.warn(
-                `Could not fetch posts for @${username}. Skipping this user.`
-              );
-              continue;
-            }
-
-            await storeUserTweets(username, fetchedTweets);
-            tweets = fetchedTweets.map((tweet) => normalizeTweetData(tweet));
+          tweets = fetchedTweets.map(tweet => normalizeTweetData(tweet));
+        }
+      }
+      
+      // Debug log
+      log.info(`Retrieved ${tweets.length} posts for ${username}`);
+      
+      // Filter out reposts and get examples per user (up to 15 for better style capture)
+      const examples = tweets
+        .map(t => {
+          // Handle different possible post formats
+          if (typeof t === 'string') return t;
+          if (typeof t === 'object' && t !== null) {
+            return t.text || (t.full_text || t.tweet_text || '');
           }
-        }
-
-        // Debug log
-        log.info(`Retrieved ${tweets.length} posts for ${username}`);
-
-        // Filter out reposts and get examples per user (up to 15 for better style capture)
-        const examples = tweets
-          .map((t) => {
-            // Handle different possible post formats
-            if (typeof t === "string") return t;
-            if (typeof t === "object" && t !== null) {
-              return t.text || t.full_text || t.tweet_text || "";
-            }
-            return "";
-          })
-          .filter(
-            (text) =>
-              text && typeof text === "string" && !text.startsWith("RT @")
-          )
-          .slice(0, 15);
-
-        if (examples.length > 0) {
-          userTweets.push({
-            username: username,
-            examples: examples,
-          });
-        }
+          return '';
+        })
+        .filter(text => text && typeof text === 'string' && !text.startsWith("RT @"))
+        .slice(0, 15);
+      
+      if (examples.length > 0) {
+        userTweets.push({
+          username: username,
+          examples: examples
+        });
       }
+    }
 
-      // If we couldn't get posts for any users, return an error
-      if (userTweets.length === 0) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Could not retrieve posts for any of the specified users.",
-            },
-          ],
-          isError: true,
-        };
-      }
-
-      // Build the prompt for post generation
-      let prompt;
-
-      // Single user case
-      if (userTweets.length === 1) {
-        const username = userTweets[0].username;
-        const tweetExamples = userTweets[0].examples.join("\n\n");
-
-        prompt = `You are tasked with creating a post in the distinct style of @${username}. Study their writing patterns, tone, vocabulary, emoji usage, and formatting from these sample posts, then create an authentic post about ${topic} that perfectly captures their voice.\n\nSample posts:\n\n${tweetExamples}\n\nYour generated post about ${topic} (ONLY return the post text with no explanations):`;
-      }
-      // Multiple users case - style blending
-      else {
-        prompt = `You are tasked with creating a post that perfectly blends the distinct styles of `;
-
-        // Add usernames to the prompt
-        if (userTweets.length === 2) {
-          prompt += `@${userTweets[0].username} and @${userTweets[1].username}`;
-        } else {
-          const lastUser = userTweets[userTweets.length - 1].username;
-          const otherUsers = userTweets
-            .slice(0, -1)
-            .map((ut) => `@${ut.username}`)
-            .join(", ");
-          prompt += `${otherUsers}, and @${lastUser}`;
-        }
-
-        prompt += `. Study their writing patterns, tone, vocabulary, emoji usage, and formatting from the sample posts below.\n\n`;
-        prompt += `Create an authentic post about ${topic} that blends elements from each of their unique voices.\n\n`;
-
-        // Add examples from each user
-        for (const userTweet of userTweets) {
-          prompt += `Posts by @${
-            userTweet.username
-          }:\n${userTweet.examples.join("\n\n")}\n\n`;
-        }
-
-        prompt += `Your blended-style post about ${topic} (ONLY return the post text with no explanations):`;
-      }
-
+    // If we couldn't get posts for any users, return an error
+    if (userTweets.length === 0) {
       return {
         content: [
           {
             type: "text",
-            text: prompt,
+            text: "Could not retrieve posts for any of the specified users.",
           },
         ],
+        isError: true,
       };
     }
-  );
 
-  // Add all your prompts
-  server.prompt(
-    "analyze-x-user",
-    {
-      username: z.string().describe("X handle (without @)"),
-    },
-    ({ username }) => ({
-      messages: [
+    // Build the prompt for post generation
+    let prompt;
+    
+    // Single user case
+    if (userTweets.length === 1) {
+      const username = userTweets[0].username;
+      const tweetExamples = userTweets[0].examples.join("\n\n");
+      
+      prompt = `You are tasked with creating a post in the distinct style of @${username}. Study their writing patterns, tone, vocabulary, emoji usage, and formatting from these sample posts, then create an authentic post about ${topic} that perfectly captures their voice.\n\nSample posts:\n\n${tweetExamples}\n\nYour generated post about ${topic} (ONLY return the post text with no explanations):`;
+    }
+    // Multiple users case - style blending
+    else {
+      prompt = `You are tasked with creating a post that perfectly blends the distinct styles of `;
+      
+      // Add usernames to the prompt
+      if (userTweets.length === 2) {
+        prompt += `@${userTweets[0].username} and @${userTweets[1].username}`;
+      } else {
+        const lastUser = userTweets[userTweets.length - 1].username;
+        const otherUsers = userTweets.slice(0, -1).map(ut => `@${ut.username}`).join(", ");
+        prompt += `${otherUsers}, and @${lastUser}`;
+      }
+      
+      prompt += `. Study their writing patterns, tone, vocabulary, emoji usage, and formatting from the sample posts below.\n\n`;
+      prompt += `Create an authentic post about ${topic} that blends elements from each of their unique voices.\n\n`;
+
+      // Add examples from each user
+      for (const userTweet of userTweets) {
+        prompt += `Posts by @${userTweet.username}:\n${userTweet.examples.join("\n\n")}\n\n`;
+      }
+      
+      prompt += `Your blended-style post about ${topic} (ONLY return the post text with no explanations):`;
+    }
+
+    return {
+      content: [
         {
-          role: "user",
-          content: {
-            type: "text",
-            text: `Analyze the X profile and posting style of @${username}. Please run the analyze_twitter_profile tool to gather data about their posts, and then provide insights about their writing style, topics they focus on, and what makes their posts unique.`,
-          },
+          type: "text",
+          text: prompt,
         },
       ],
-    })
-  );
+    };
+  }
+);
 
-  // Add generate-in-style prompt
-  server.prompt(
-    "generate-in-style",
-    {
-      username: z.string().describe("X handle to mimic (without @)"),
-      topic: z.string().describe("Topic to post about"),
-    },
-    ({ username, topic }) => ({
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text: `Write a post about ${topic} in the style of @${username}. Use the generate_tweet tool to get style guidance based on their past posts, then craft a post that feels authentic to their voice.`,
-          },
-        },
-      ],
-    })
-  );
+// ----- Define MCP Prompts -----
 
-  // Add blend-x-styles prompt
-  server.prompt(
-    "blend-x-styles",
-    {
-      usernames: z
-        .array(z.string())
-        .describe("Array of X handles to mix (without @)"),
-      topic: z.string().describe("Topic to post about"),
-    },
-    ({ usernames, topic }) => ({
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text: `Create a post about ${topic} that blends the writing styles of the specified X users. Use the generate_tweet tool with multiple usernames to get style guidance, then write a post that captures elements from all the styles.`,
-          },
+// Add the analyze-x-user prompt
+server.prompt(
+  "analyze-x-user",
+  {
+    username: z.string().describe("X handle (without @)"),
+  },
+  ({ username }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text: `Analyze the X profile and posting style of @${username}. Please run the analyze_twitter_profile tool to gather data about their posts, and then provide insights about their writing style, topics they focus on, and what makes their posts unique.`,
         },
-      ],
-    })
-  );
-}
+      },
+    ],
+  })
+);
+
+// Add the generate-in-style prompt
+server.prompt(
+  "generate-in-style",
+  {
+    username: z.string().describe("X handle to mimic (without @)"),
+    topic: z.string().describe("Topic to post about"),
+  },
+  ({ username, topic }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text: `Write a post about ${topic} in the style of @${username}. Use the generate_tweet tool to get style guidance based on their past posts, then craft a post that feels authentic to their voice.`,
+        },
+      },
+    ],
+  })
+);
+
+// Add the blend-x-styles prompt
+server.prompt(
+  "blend-x-styles",
+  {
+    usernames: z.array(z.string()).describe("Array of X handles to mix (without @)"),
+    topic: z.string().describe("Topic to post about"),
+  },
+  ({ usernames, topic }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text: `Create a post about ${topic} that blends the writing styles of the specified X users. Use the generate_tweet tool with multiple usernames to get style guidance, then write a post that captures elements from all the styles.`,
+        },
+      },
+    ],
+  })
+);
+
+// Start the server
+log.info("Starting X Style MCP server...");
+const transport = new StdioServerTransport();
+await server.connect(transport);
