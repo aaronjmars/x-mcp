@@ -1,4 +1,4 @@
-# X Style MCP Server
+# X MCP Server
 
 An MCP server for analyzing X (Twitter) user styles and generating posts in their distinctive voice.
 
@@ -21,8 +21,8 @@ An MCP server for analyzing X (Twitter) user styles and generating posts in thei
 1. Clone this repository
 
 ```bash
-git clone https://github.com/yourusername/x-style-mcp.git
-cd x-style-mcp
+git clone https://github.com/yourusername/x-mcp.git
+cd x-mcp
 ```
 
 2. Install dependencies
