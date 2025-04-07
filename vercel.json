@@ -1,13 +1,13 @@
 {
-    "version": 2,
-    "functions": {
-      "api/*.js": {
-        "maxDuration": 300
-      }
-    },
-    "routes": [
-      { "src": "/sse", "dest": "/api/index.js" },
-      { "src": "/api/messages", "dest": "/api/index.js" },
-      { "src": "/api/health", "dest": "/api/index.js" }
-    ]
-  }
+  "version": 2,
+  "functions": {
+    "api/*.js": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    { "source": "/sse", "destination": "/api/index" },
+    { "source": "/api/messages", "destination": "/api/index" },
+    { "source": "/api/health", "destination": "/api/index" }
+  ]
+}
