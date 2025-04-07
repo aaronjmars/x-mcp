@@ -1,15 +1,13 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/index.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/api/index.js"
-    }
-  ]
-}
+    "version": 2,
+    "functions": {
+      "api/*.js": {
+        "maxDuration": 300
+      }
+    },
+    "routes": [
+      { "src": "/sse", "dest": "/api/index.js" },
+      { "src": "/api/messages", "dest": "/api/index.js" },
+      { "src": "/api/health", "dest": "/api/index.js" }
+    ]
+  }
