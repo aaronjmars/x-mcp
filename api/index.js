@@ -22,6 +22,7 @@ app.get("/sse", async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
+  res.setHeader("Keep-Alive", "timeout=120"); // Add this line
 
   // Create a new MCP server instance
   const server = new McpServer({
