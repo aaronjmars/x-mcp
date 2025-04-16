@@ -1043,6 +1043,242 @@ server.prompt(
   })
 );
 
+/**
+ * Compare perspectives across multiple X accounts
+ * Finds tweets containing a specified term and summarizes different viewpoints
+ */
+server.tool(
+  "compare_perspectives",
+  {
+    usernames: z
+      .array(z.string())
+      .describe("Array of X handles to compare (without @)"),
+    term: z
+      .string()
+      .describe("Term or topic to search for in their tweets"),
+    days_back: z
+      .number()
+      .optional()
+      .default(90)
+      .describe("Number of days back to analyze (max 180)"),
+    force_refresh: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, fetch new data even if profiles exist in database"),
+  },
+  async ({ usernames, term, days_back = 90, force_refresh = false }) => {
+    // Validate parameters
+    if (!Array.isArray(usernames)) {
+      usernames = [usernames]; // Convert single username to array
+    }
+    
+    if (usernames.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Please provide at least one X username to analyze.",
+          },
+        ],
+        isError: true,
+      };
+    }
+    
+    if (!term || term.trim() === "") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Please provide a valid term or topic to search for.",
+          },
+        ],
+        isError: true,
+      };
+    }
+    
+    // Normalize term for searching (case insensitive)
+    const searchTerm = term.toLowerCase();
+    log.info(`Searching for term "${searchTerm}" across ${usernames.length} X accounts...`);
+    
+    // Validate days_back to a reasonable range
+    days_back = Math.min(Math.max(1, days_back), 180);
+    
+    // Calculate cutoff date
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days_back);
+    
+    // Collect relevant tweets from each user
+    const userPerspectives = [];
+    
+    for (const username of usernames) {
+      log.info(`Processing account @${username}...`);
+      
+      // Get tweets for this user (from cache or fresh)
+      let tweets = [];
+      
+      if (!force_refresh) {
+        const cachedResult = await getCachedProfile(username);
+        
+        if (cachedResult && cachedResult.status === "fresh") {
+          try {
+            tweets = cachedResult.profile.profile_data?.tweets || [];
+            log.info(`Using cached posts for @${username} (${tweets.length} posts)`);
+          } catch (error) {
+            log.error(`Error processing cached profile for ${username}: ${error.message}`);
+            tweets = [];
+          }
+        }
+      }
+      
+      // Fetch new tweets if needed
+      if (tweets.length === 0) {
+        log.info(`Fetching posts for ${username}...`);
+        const fetchedTweets = await getUserTweets(username, 100);
+        
+        if (!fetchedTweets || fetchedTweets.length === 0) {
+          log.warn(`No tweets found for @${username}, skipping this account.`);
+          continue; // Skip to next user
+        }
+        
+        // Store tweets and normalize
+        await storeUserTweets(username, fetchedTweets);
+        tweets = fetchedTweets.map((tweet) => normalizeTweetData(tweet));
+      }
+      
+      // Filter tweets by date and search term
+      const relevantTweets = tweets.filter(tweet => {
+        // Check date if created_at is available
+        let isWithinDateRange = true;
+        if (tweet.created_at) {
+          try {
+            const tweetDate = new Date(tweet.created_at);
+            isWithinDateRange = tweetDate >= cutoffDate;
+          } catch (e) {
+            // If date parsing fails, include the tweet
+            isWithinDateRange = true;
+          }
+        }
+        
+        // Check if tweet contains the search term (case insensitive)
+        const tweetText = (tweet.text || "").toLowerCase();
+        const containsTerm = tweetText.includes(searchTerm);
+        
+        return isWithinDateRange && containsTerm;
+      });
+      
+      log.info(`Found ${relevantTweets.length} tweets from @${username} containing "${searchTerm}"`);
+      
+      // If we found relevant tweets, add to perspectives
+      if (relevantTweets.length > 0) {
+        // Sort chronologically (newest first for this view)
+        relevantTweets.sort((a, b) => {
+          try {
+            return new Date(b.created_at) - new Date(a.created_at);
+          } catch (e) {
+            return 0;
+          }
+        });
+        
+        // Extract just what we need
+        const formattedTweets = relevantTweets.map(tweet => ({
+          text: tweet.text || "",
+          date: tweet.created_at ? new Date(tweet.created_at).toISOString().split('T')[0] : 'Unknown date',
+          engagement: {
+            likes: tweet.like_count || 0,
+            retweets: tweet.retweet_count || 0
+          }
+        }));
+        
+        userPerspectives.push({
+          username,
+          tweetCount: relevantTweets.length,
+          tweets: formattedTweets
+        });
+      }
+    }
+    
+    // Check if we found any relevant content
+    if (userPerspectives.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No tweets containing "${term}" were found from any of the specified accounts in the last ${days_back} days.`,
+          },
+        ],
+      };
+    }
+    
+    // Generate comparison prompt
+    const comparisonPrompt = `
+You are tasked with creating a comparative analysis of how different X accounts discuss the topic: "${term}"
+
+Analyze the tweets from these ${userPerspectives.length} accounts to identify:
+1. Each account's perspective on the topic
+2. Key points of agreement and disagreement
+3. Unique insights or angles each brings to the discussion
+4. Changes in positions or opinions over time (if evident)
+5. The overall sentiment of each account toward the topic
+
+Format your analysis as follows:
+- Begin with a brief introduction explaining the topic and significance
+- Create a separate section for each account with their key viewpoints
+- Include a "Common Themes" section identifying shared perspectives
+- Include a "Contrasting Views" section highlighting disagreements
+- End with a summary of the overall discourse
+
+Here are the relevant tweets from each account:
+
+${userPerspectives.map(perspective => `
+## @${perspective.username} (${perspective.tweetCount} tweets about "${term}")
+
+${perspective.tweets.map((tweet, idx) => `[${idx + 1}] ${tweet.date}: "${tweet.text}"`).join('\n\n')}
+`).join('\n\n')}
+
+Based on ONLY the tweets provided above, analyze how these accounts view "${term}" and compare their perspectives.
+`;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: comparisonPrompt,
+        },
+      ],
+    };
+  }
+);
+
+// Add the compare-perspectives prompt
+server.prompt(
+  "compare-perspectives",
+  {
+    usernames: z
+      .array(z.string())
+      .describe("Array of X handles to compare (without @)"),
+    term: z
+      .string()
+      .describe("Term or topic to search for in their tweets"),
+    days_back: z
+      .number()
+      .optional()
+      .default(90)
+      .describe("Number of days back to analyze (max 180)"),
+  },
+  ({ usernames, term, days_back = 90 }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text: `Please compare how these X accounts (@${Array.isArray(usernames) ? usernames.join(', @') : usernames}) discuss "${term}" in their posts. Use the compare_perspectives tool to find relevant tweets, then create a comprehensive analysis showing how their viewpoints align, differ, and evolve on this topic.`,
+        },
+      },
+    ],
+  })
+);
+
 // Start the server
 log.info("Starting X Style MCP server...");
 const transport = new StdioServerTransport();
