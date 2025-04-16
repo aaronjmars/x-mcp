@@ -849,6 +849,200 @@ server.prompt(
   })
 );
 
+/**
+ * Summarize X timeline tool
+ * Retrieves and analyzes the last 100 tweets from an account
+ * to provide a recap of updates and news
+ */
+server.tool(
+  "summarize_twitter_timeline",
+  {
+    username: z.string().describe("X handle (without @)"),
+    days_back: z
+      .number()
+      .optional()
+      .default(30)
+      .describe("Number of days back to analyze (max 90)"),
+    force_refresh: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, fetch new data even if profile exists in database"),
+  },
+  async ({ username, days_back = 30, force_refresh = false }) => {
+    // Validate days_back to a reasonable range
+    days_back = Math.min(Math.max(1, days_back), 90);
+
+    log.info(
+      `Summarizing timeline for ${username} over the last ${days_back} days...`
+    );
+
+    // Check cache first unless force_refresh is true
+    let tweets = [];
+
+    if (!force_refresh) {
+      const cachedResult = await getCachedProfile(username);
+
+      if (cachedResult && cachedResult.status === "fresh") {
+        try {
+          tweets = cachedResult.profile.profile_data?.tweets || [];
+          log.info(
+            `Using cached posts for @${username} (fetched ${getTimeAgo(
+              cachedResult.profile.created_at
+            )}). ${tweets.length} posts available.`
+          );
+        } catch (error) {
+          log.error(
+            `Error processing cached profile for ${username}: ${error.message}`
+          );
+          // If there's an error processing the cache, we'll fetch fresh data
+          tweets = [];
+        }
+      }
+    }
+
+    // If no cache or force refresh, fetch new tweets
+    if (tweets.length === 0) {
+      log.info(`Fetching posts for ${username}...`);
+      const fetchedTweets = await getUserTweets(username, 100);
+
+      if (!fetchedTweets || fetchedTweets.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Unable to fetch posts for this user. The user may not exist or have no public posts.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Store the tweets
+      await storeUserTweets(username, fetchedTweets);
+
+      // Normalize the tweets
+      tweets = fetchedTweets.map((tweet) => normalizeTweetData(tweet));
+    }
+
+    // Filter tweets by date if days_back is specified
+    if (days_back) {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - days_back);
+
+      tweets = tweets.filter((tweet) => {
+        // Try to parse the created_at date
+        try {
+          const tweetDate = new Date(tweet.created_at);
+          return tweetDate >= cutoffDate;
+        } catch (e) {
+          // If date parsing fails, include the tweet to be safe
+          return true;
+        }
+      });
+
+      log.info(
+        `Filtered to ${tweets.length} posts within the last ${days_back} days`
+      );
+    }
+
+    // Sort tweets chronologically (oldest first)
+    tweets.sort((a, b) => {
+      try {
+        return new Date(a.created_at) - new Date(b.created_at);
+      } catch (e) {
+        return 0;
+      }
+    });
+
+    // Extract text content and metadata for analysis
+    const tweetContents = tweets.map((tweet) => ({
+      text: tweet.text || "",
+      date: tweet.created_at || "",
+      engagement: {
+        likes: tweet.like_count || 0,
+        retweets: tweet.retweet_count || 0,
+        replies: tweet.reply_count || 0,
+      },
+      hashtags: tweet.hashtags || [],
+      mentions: tweet.mentions || [],
+      urls: tweet.urls || [],
+    }));
+
+    // Generate summary instructions
+    const summaryPrompt = `
+You are tasked with creating a concise summary of the Twitter/X timeline for @${username} over the past ${days_back} days.
+
+Analyze the following ${tweets.length} tweets to identify:
+1. Key topics and themes discussed
+2. Major announcements or news shared
+3. Notable projects or work mentioned
+4. Recurring hashtags or conversations
+5. General sentiment and tone
+
+For projects or companies, focus on:
+- Product updates and releases
+- Business developments
+- Community engagement
+- Future plans mentioned
+
+For individuals, focus on:
+- Professional updates
+- Personal projects
+- Opinions on industry trends
+- Interactions with others
+
+Organize your summary in a clear, chronological structure. Include the most important information first, followed by supporting details. Mention dates for significant announcements.
+
+Here are the tweets to analyze (in chronological order, oldest first):
+
+${tweetContents
+  .map(
+    (tweet, index) =>
+      `[${index + 1}] ${
+        tweet.date
+          ? new Date(tweet.date).toISOString().split("T")[0]
+          : "Unknown date"
+      }: ${tweet.text}`
+  )
+  .join("\n\n")}
+`;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: summaryPrompt,
+        },
+      ],
+    };
+  }
+);
+
+// Add the timeline-summary prompt
+server.prompt(
+  "timeline-summary",
+  {
+    username: z.string().describe("X handle (without @)"),
+    days_back: z
+      .number()
+      .optional()
+      .default(30)
+      .describe("Number of days back to analyze (max 90)"),
+  },
+  ({ username, days_back = 30 }) => ({
+    messages: [
+      {
+        role: "user",
+        content: {
+          type: "text",
+          text: `Please provide a comprehensive summary of @${username}'s X timeline over the past ${days_back} days. Use the summarize_twitter_timeline tool to retrieve the data, then create a well-organized recap highlighting key announcements, updates, news, and themes from their posts.`,
+        },
+      },
+    ],
+  })
+);
+
 // Start the server
 log.info("Starting X Style MCP server...");
 const transport = new StdioServerTransport();
